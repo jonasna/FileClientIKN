@@ -3,32 +3,35 @@
 #include <boost/filesystem.hpp>
 #include <fstream>
 #include "read_server.h"
+#include <sys/ioctl.h>
+#include <chrono>
+#include <sstream>
 
 using namespace boost::asio;
 using ip::tcp;
 
 std::string read_server(tcp::socket& server_sock);
-std::vector<char> read_server(tcp::socket& server_sock, unsigned long count);
 unsigned long write_server(tcp::socket& server_sock, const char* buf, unsigned long count);
 unsigned long write_server(tcp::socket& server_sock, const std::string& msg);
 void receive_file(tcp::socket& server_sock, const std::string& filename);
-
+void output_percentage(unsigned long current, unsigned long target);
+void output_percentage2(unsigned long current, unsigned long target);
 int main(int argc, char** argv)
 {
     try
     {
-//        if(argc != 3)
-//        {
-//            throw std::invalid_argument("Usage: <file_client> <server_ip> <file_path>");
-//        }
+        if(argc != 3)
+        {
+            throw std::invalid_argument("Usage: <file_client> <server_ip> <file_path>");
+        }
 
         io_service io_service;
 
         tcp::socket sock(io_service);
         tcp::resolver resolver(io_service);
-        connect(sock, resolver.resolve("192.168.1.187", "9000"));
+        connect(sock, resolver.resolve(argv[1], "9000"));
 
-        receive_file(sock, "C:/Users/jonas/Desktop/C_Sharp_Succinctly.pdf");
+        receive_file(sock, argv[2]);
 
         sock.shutdown(sock.shutdown_both);
 
@@ -43,14 +46,6 @@ std::string read_server(tcp::socket& server_sock)
     streambuf read_buffer;
     read_until(server_sock, read_buffer, '\0');
     return { buffers_begin(read_buffer.data()), buffers_end(read_buffer.data())-1 };
-}
-
-std::vector<char> read_server(tcp::socket& server_sock, unsigned long count)
-{
-    streambuf read_buffer;
-    boost::system::error_code ignored_error;
-    auto n = boost::asio::read(server_sock, read_buffer, transfer_exactly(count), ignored_error);
-    return { buffers_begin(read_buffer.data()), buffers_begin(read_buffer.data()) + n };
 }
 
 unsigned long write_server(tcp::socket& server_sock, const char* buf, unsigned long count)
@@ -73,28 +68,90 @@ void receive_file(tcp::socket& server_sock, const std::string& filepath)
 
     if(file_size)
     {
-        std::cout << "Receiving... " << std::endl;
 
         auto temp_path = boost::filesystem::path(filepath);
         auto file_name = temp_path.filename().string();
+
+        std::cout << "Receiving file: " << file_name << " ... " << std::endl;
 
         std::ofstream output_file(file_name);
 
         unsigned long bytes_received = 0;
         char input_buffer[1000];
 
+        auto start = chrono::steady_clock::now();
+
         while(auto count = read_server(server_sock, input_buffer))
         {
             bytes_received += count;
             output_file.write(input_buffer, count);
+            //output_percentage2(bytes_received, file_size);
         }
 
         output_file.close();
 
-        std::cout << "All done! - Received: " << bytes_received << " bytes out of " << file_size << std::endl;
+        auto end = chrono::steady_clock::now();
+        auto diff = end - start;
+        //std::cout << std::endl;
+
+        std::cout << "All done! - received: " << bytes_received << " bytes out of " << file_size << std::endl;
+        std::cout << "Download took " << chrono::duration<double, std::milli>(diff).count() / 1000 << " sec " << std::endl;
 
     }else
     {
         std::cout << "File was not found on the server!" << std::endl;
     }
+}
+
+void output_percentage(unsigned long current, unsigned long target)
+{
+
+    struct winsize w;
+    ioctl(0, TIOCGWINSZ, &w);
+
+    auto cols = w.ws_col;
+
+    auto p = static_cast<int>(((float)current / target) * 100);
+
+    std::stringstream out;
+
+    if(p % 2 == 0)
+    {
+        auto nr_of_cols = static_cast<int>((cols * ( (float) p / 100 ))) - 2;
+
+        for(int i = 0; i < nr_of_cols; ++i)
+        {
+            out << "x";
+        }
+
+        std::cout << "\r" << "[" << out.str() << "]";
+
+    }
+}
+
+void output_percentage2(unsigned long current, unsigned long target)
+{
+    struct winsize w;
+    ioctl(0, TIOCGWINSZ, &w);
+
+    auto cols = w.ws_col;
+    auto nr_or_cols = static_cast<int>(0.3 * cols);
+
+    auto p = static_cast<int>(((float)current / target) * 100);
+
+    auto display_cols = static_cast<int>((nr_or_cols * ( (float) p / 100 )));
+
+    std::stringstream out;
+
+    for(int i = 0; i < display_cols; ++i)
+    {
+        out << "x";
+    }
+
+    for(int i = 0; i < (nr_or_cols - display_cols); ++i)
+    {
+        out << " ";
+    }
+
+    std::cout << "\r" << "[" << out.str() << "] - " << p << "%";
 }
